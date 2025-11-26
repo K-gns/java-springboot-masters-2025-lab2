@@ -1,6 +1,5 @@
 package ru.filatov.MySecondTestAppSpringBoot.controller;
 
-import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -14,10 +13,9 @@ import ru.filatov.MySecondTestAppSpringBoot.exception.ValidationFailedException;
 import ru.filatov.MySecondTestAppSpringBoot.model.*;
 import ru.filatov.MySecondTestAppSpringBoot.service.ModifyResponseService;
 import ru.filatov.MySecondTestAppSpringBoot.service.ValidationService;
-import ru.filatov.MySecondTestAppSpringBoot.util.DateTimeUtil;
+import ru.filatov.MySecondTestAppSpringBoot.util.ControllerValidationHelper;
+import ru.filatov.MySecondTestAppSpringBoot.util.ResponseFactory;
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
 
 @Slf4j
 @RestController
@@ -25,12 +23,18 @@ public class MyController {
 
     private final ValidationService validationService;
     private final ModifyResponseService modifyResponseService;
+    private final ControllerValidationHelper validationHelper;
+    private final ResponseFactory responseFactory;
 
     @Autowired
     public MyController(ValidationService validationService,
-                        @Qualifier("ModifySystemTimeResponseService") ModifyResponseService modifyResponseService) {
+                        @Qualifier("ModifySystemTimeResponseService") ModifyResponseService modifyResponseService,
+                        ControllerValidationHelper validationHelper,
+                        ResponseFactory responseFactory) {
         this.validationService = validationService;
         this.modifyResponseService = modifyResponseService;
+        this.validationHelper = validationHelper;
+        this.responseFactory = responseFactory;
     }
 
     @PostMapping(value = "/feedback")
@@ -39,52 +43,34 @@ public class MyController {
 
         log.info("Получен Request: {}", request);
 
-        Response response = Response.builder()
-                .uid(request.getUid())
-                .operationUid(request.getOperationUid())
-                .systemTime(DateTimeUtil.getCustomFormat().format(new Date()))
-                .code(Codes.SUCCESS)
-                .errorCode(ErrorCodes.EMPTY)
-                .errorMessage(ErrorMessages.EMPTY)
-                .build();
-
-        log.info("Создан базовый Response: {}", response);
-
-        // Проверка на "123"
+        // Правило для uid == "123"
         if ("123".equals(request.getUid())) {
-            Response errorResponse = Response.builder()
-                    .uid(request.getUid())
-                    .operationUid(request.getOperationUid())
-                    .systemTime(request.getSystemTime()) // или текущее время
-                    .code(Codes.FAILED)
-                    .errorCode(ErrorCodes.UNSUPPORTED_EXCEPTION)
-                    .errorMessage(ErrorMessages.UNSUPPORTED)
-                    .build();
-
-            log.info("Сформирован ответ с ошибкой 'UnsupportedCodeException': {}", response);
+            Response errorResponse = responseFactory.createUnsupportedResponse(request);
+            log.info("Сформирован ответ с ошибкой 'UnsupportedCodeException': {}", errorResponse);
             return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
         }
 
+        // Базовый ответ
+        Response response = responseFactory.createBaseResponse(request);
+        log.info("Создан базовый Response: {}", response);
+
+        // Валидация и получаем статус/ответ при ошибке
         try {
-            validationService.isValid(bindingResult);
+            validationHelper.validateOrThrow(validationService, bindingResult);
         } catch (ValidationFailedException e) {
-            response.setCode(Codes.FAILED);
-            response.setErrorCode(ErrorCodes.VALIDATION_EXCEPTION);
-            response.setErrorMessage(ErrorMessages.VALIDATION);
-            log.info("Сформирован ответ с ошибкой валидации: {}", response);
-            return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+            Response validationError = responseFactory.createValidationFailedResponse(response);
+            log.info("Сформирован ответ с ошибкой валидации: {}", validationError);
+            return new ResponseEntity<>(validationError, HttpStatus.BAD_REQUEST);
         } catch (Exception e) {
-            response.setCode(Codes.FAILED);
-            response.setErrorCode(ErrorCodes.UNKNOWN_EXCEPTION);
-            response.setErrorMessage(ErrorMessages.UNKNOWN);
-            log.info("Сформирован ответ с неизвестной ошибкой: {}", response);
-            return new ResponseEntity<>(response, HttpStatus.INTERNAL_SERVER_ERROR);
+            Response unknownError = responseFactory.createUnknownErrorResponse(response);
+            log.info("Сформирован ответ с неизвестной ошибкой: {}", unknownError);
+            return new ResponseEntity<>(unknownError, HttpStatus.INTERNAL_SERVER_ERROR);
         }
 
-        modifyResponseService.modify(response);
+        // Модификация
+        Response modified = modifyResponseService.modify(response);
+        log.info("Ответ после модификации: {}", modified);
 
-        log.info("Ответ после модификации: {}", response);
-
-        return new ResponseEntity<>(modifyResponseService.modify(response), HttpStatus.OK);
+        return new ResponseEntity<>(modified, HttpStatus.OK);
     }
 }
